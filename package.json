@@ -1,0 +1,23 @@
+{
+  "name": "hn-sort-validator",
+  "version": "1.0.0",
+  "description": "Automated QA tool that validates Hacker News article sorting using Playwright",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js"
+  },
+  "keywords": [
+    "playwright",
+    "testing",
+    "automation",
+    "hacker-news",
+    "qa",
+    "web-scraping"
+  ],
+  "author": "Tony Lo",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
