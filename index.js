@@ -1,139 +1,131 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
+const {
+  escapeHtml,
+  evaluateValidationRun,
+  parseHackerNewsTimestamp,
+} = require("./lib/validation");
 
-async function sortHackerNewsArticles() {
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+const REQUIRED_ARTICLE_COUNT = 100;
 
-  await page.goto("https://news.ycombinator.com/newest");
+async function sortHackerNewsArticles({ headless = true, openReport = false } = {}) {
+  const browser = await chromium.launch({ headless });
 
-  const articles = [];
-  const REQUIRED = 100;
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto("https://news.ycombinator.com/newest");
 
-  // HN shows ~30 articles per page, need to paginate
-  while (articles.length < REQUIRED) {
-    const rows = await page.$$("tr.athing");
+    const articles = [];
 
-    for (const row of rows) {
-      if (articles.length >= REQUIRED) break;
+    while (articles.length < REQUIRED_ARTICLE_COUNT) {
+      const rows = await page.$$("tr.athing");
 
-      const rank = await row.$eval("span.rank", (el) => el.textContent.trim());
-      const title = await row.$eval("span.titleline > a", (el) =>
-        el.textContent.trim()
-      );
+      for (const row of rows) {
+        if (articles.length >= REQUIRED_ARTICLE_COUNT) break;
 
-      // timestamp lives in the next sibling row, inside span.age
-      const subtextRow = await row.evaluateHandle((el) =>
-        el.nextElementSibling
-      );
-      const ageSpan = await subtextRow.$("span.age");
-      const timestampRaw = await ageSpan.getAttribute("title");
-
-      // title attr looks like "2026-07-08T23:57:21 1783555041"
-      // just need the datetime part before the space
-      const dateStr = timestampRaw.split(" ")[0];
-      const timestamp = new Date(dateStr);
-
-      articles.push({
-        rank: parseInt(rank),
-        title,
-        dateStr,
-        timestamp,
-      });
-    }
-
-    // if still need more, click "More" to go to the next page
-    if (articles.length < REQUIRED) {
-      const moreLink = await page.$("a.morelink");
-      if (!moreLink) {
-        console.log(
-          `Could only find ${articles.length} articles, expected ${REQUIRED}.`
+        const rank = await row.$eval("span.rank", (element) =>
+          element.textContent.trim()
         );
-        break;
+        const title = await row.$eval("span.titleline > a", (element) =>
+          element.textContent.trim()
+        );
+        const subtextRow = await row.evaluateHandle(
+          (element) => element.nextElementSibling
+        );
+        const ageSpan = await subtextRow.$("span.age");
+        const timestampRaw = await ageSpan?.getAttribute("title");
+        const { dateStr, timestamp } = parseHackerNewsTimestamp(timestampRaw);
+
+        articles.push({
+          rank: parseInt(rank, 10),
+          title,
+          dateStr,
+          timestamp,
+        });
       }
-      await moreLink.click();
-      await page.waitForSelector("tr.athing");
+
+      if (articles.length < REQUIRED_ARTICLE_COUNT) {
+        const moreLink = await page.$("a.morelink");
+        if (!moreLink) break;
+
+        await moreLink.click();
+        await page.waitForSelector("tr.athing");
+      }
     }
-  }
 
-  console.log(`Collected ${articles.length} articles.\n`);
+    console.log(`Collected ${articles.length} articles.\n`);
 
-  // check that each article is newer than or equal to the next one
-  let sorted = true;
-  const failures = [];
+    const validation = evaluateValidationRun(articles, REQUIRED_ARTICLE_COUNT);
+    const { collectionComplete, passed } = validation;
 
-  for (let i = 0; i < articles.length - 1; i++) {
-    const current = articles[i];
-    const next = articles[i + 1];
-    const inOrder = current.timestamp >= next.timestamp;
+    if (passed) {
+      console.log("PASS: The first 100 articles are sorted from newest to oldest.");
+    } else {
+      if (!collectionComplete) {
+        console.log(
+          `FAIL: Collected ${articles.length} articles; expected ${REQUIRED_ARTICLE_COUNT}.`
+        );
+      }
 
-    if (!inOrder) {
-      sorted = false;
-      failures.push({
-        index: i + 1,
-        current: current,
-        next: next,
-      });
+      if (!validation.sorted) {
+        console.log("FAIL: Articles are NOT sorted correctly.");
+        console.log(`Found ${validation.failures.length} out-of-order pair(s):\n`);
+
+        for (const failure of validation.failures) {
+          console.log(
+            `  #${failure.current.rank} (${failure.current.dateStr}) should be newer than #${failure.next.rank} (${failure.next.dateStr})`
+          );
+        }
+      }
     }
-  }
 
-  // log results
-  if (sorted) {
-    console.log("PASS: The first 100 articles are sorted from newest to oldest.");
-  } else {
-    console.log("FAIL: Articles are NOT sorted correctly.");
-    console.log(`Found ${failures.length} out-of-order pair(s):\n`);
-    for (const f of failures) {
-      console.log(
-        `  #${f.current.rank} (${f.current.dateStr}) should be newer than #${f.next.rank} (${f.next.dateStr})`
-      );
+    const reportPath = buildReport(articles, {
+      passed,
+      failures: validation.failures,
+      comparisonCount: validation.comparisonCount,
+    });
+    console.log(`\nReport saved to: ${reportPath}`);
+
+    if (openReport) {
+      const reportPage = await context.newPage();
+      await reportPage.goto("file:///" + reportPath.replace(/\\/g, "/"));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+
+    return { passed, collectionComplete, ...validation, reportPath };
+  } finally {
+    await browser.close();
   }
-
-  // build the html report
-  const reportPath = buildReport(articles, sorted, failures);
-  console.log(`\nReport saved to: ${reportPath}`);
-
-  // open the report in the browser we already have
-  const reportPage = await context.newPage();
-  await reportPage.goto("file:///" + reportPath.replace(/\\/g, "/"));
-
-  // keep browser open for a few seconds so you can see the report
-  await new Promise((resolve) => setTimeout(resolve, 5000));
-  await browser.close();
 }
 
-function buildReport(articles, sorted, failures) {
-  const failedIndices = new Set(failures.map((f) => f.index));
+function buildReport(articles, { passed, failures, comparisonCount }) {
+  const failedIndices = new Set(failures.map((failure) => failure.index));
+  const passCount = comparisonCount - failures.length;
+  const tableRows = articles
+    .map((article, index) => {
+      const isLast = index === articles.length - 1;
+      const failed = failedIndices.has(index + 1);
+      const status = isLast ? "Not compared" : failed ? "Out of order" : "OK";
+      const rowClass = failed ? "fail" : isLast ? "" : "pass";
 
-  let tableRows = "";
-  for (let i = 0; i < articles.length; i++) {
-    const a = articles[i];
-    const status = failedIndices.has(i + 1) ? "Out of order" : "OK";
-    const rowClass = status === "OK" ? "pass" : "fail";
-    const escapedTitle = a.title
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
-    tableRows += `
+      return `
       <tr class="${rowClass}">
-        <td>${a.rank}</td>
-        <td>${escapedTitle}</td>
-        <td>${a.dateStr}</td>
+        <td>${article.rank}</td>
+        <td>${escapeHtml(article.title)}</td>
+        <td>${escapeHtml(article.dateStr)}</td>
         <td>${status}</td>
       </tr>`;
-  }
+    })
+    .join("");
 
-  const passCount = articles.length - 1 - failures.length;
   const now = new Date().toLocaleString();
-
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HN Sort Validation Report</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -146,11 +138,7 @@ function buildReport(articles, sorted, failures) {
     .container { max-width: 960px; margin: 0 auto; }
     h1 { font-size: 22px; margin-bottom: 6px; }
     .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
-    .summary {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 24px;
-    }
+    .summary { display: flex; gap: 16px; margin-bottom: 24px; }
     .card {
       background: #fff;
       border-radius: 6px;
@@ -158,24 +146,27 @@ function buildReport(articles, sorted, failures) {
       border: 1px solid #ddd;
       flex: 1;
     }
-    .card .label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card .label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
     .card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
-    .card.result-pass .value { color: #1a7f37; }
-    .card.result-fail .value { color: #cf222e; }
+    .result-pass .value { color: #1a7f37; }
+    .result-fail .value { color: #cf222e; }
+    .table-wrap { overflow-x: auto; }
     table {
       width: 100%;
       border-collapse: collapse;
       background: #fff;
       border: 1px solid #ddd;
-      border-radius: 6px;
-      overflow: hidden;
       font-size: 14px;
     }
     th {
       background: #f0f0f0;
       text-align: left;
       padding: 10px 14px;
-      font-weight: 600;
       font-size: 12px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -184,44 +175,49 @@ function buildReport(articles, sorted, failures) {
     }
     td { padding: 8px 14px; border-bottom: 1px solid #eee; }
     tr.fail td { background: #fff5f5; }
-    tr.fail td:last-child { color: #cf222e; font-weight: 500; }
+    tr.fail td:last-child { color: #cf222e; font-weight: 600; }
     tr.pass td:last-child { color: #1a7f37; }
+    @media (max-width: 640px) {
+      body { padding: 16px; }
+      .summary { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Hacker News — Sort Validation Report</h1>
+  <main class="container">
+    <h1>Hacker News Sort Validation Report</h1>
     <p class="meta">Generated on ${now}</p>
 
     <div class="summary">
-      <div class="card ${sorted ? "result-pass" : "result-fail"}">
+      <div class="card ${passed ? "result-pass" : "result-fail"}">
         <div class="label">Result</div>
-        <div class="value">${sorted ? "PASS" : "FAIL"}</div>
+        <div class="value">${passed ? "PASS" : "FAIL"}</div>
       </div>
       <div class="card">
         <div class="label">Articles Checked</div>
         <div class="value">${articles.length}</div>
       </div>
       <div class="card">
-        <div class="label">In Order</div>
-        <div class="value">${passCount} / ${articles.length - 1}</div>
+        <div class="label">Pairs In Order</div>
+        <div class="value">${passCount} / ${comparisonCount}</div>
       </div>
     </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Title</th>
-          <th>Timestamp</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${tableRows}
-      </tbody>
-    </table>
-  </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Title</th>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}
+        </tbody>
+      </table>
+    </div>
+  </main>
 </body>
 </html>`;
 
@@ -230,6 +226,20 @@ function buildReport(articles, sorted, failures) {
   return reportPath;
 }
 
-(async () => {
-  await sortHackerNewsArticles();
-})();
+if (require.main === module) {
+  const args = new Set(process.argv.slice(2));
+
+  sortHackerNewsArticles({
+    headless: !args.has("--headed"),
+    openReport: args.has("--open-report"),
+  })
+    .then(({ passed }) => {
+      if (!passed) process.exitCode = 1;
+    })
+    .catch((error) => {
+      console.error(`ERROR: ${error.message}`);
+      process.exitCode = 1;
+    });
+}
+
+module.exports = { buildReport, sortHackerNewsArticles };

@@ -57,7 +57,7 @@ npx playwright install chromium
 ### Run the Validator
 
 ```bash
-node index.js
+npm run validate
 ```
 
 The script will:
@@ -65,7 +65,25 @@ The script will:
 2. Scrape 100 articles with their timestamps
 3. Validate the sort order
 4. Generate `report.html` with results
-5. Open the report in the browser
+
+The default run is headless, making it suitable for automation. It exits with a
+non-zero status if fewer than 100 articles are collected, the ordering check
+fails, or scraping encounters an error. To watch the browser and preview the
+generated report, run:
+
+```bash
+npm run validate:headed
+```
+
+### Run the Unit Tests
+
+```bash
+npm test
+```
+
+The unit suite exercises timestamp parsing, descending/equal timestamp handling,
+incomplete collection failures, adjacent-pair failure reporting, and HTML
+escaping without requiring network access or a browser.
 
 ---
 
@@ -109,7 +127,11 @@ The generated report includes:
 
 ```
 hn-sort-validator/
-├── index.js        # Main scraper + validator + report generator
+├── index.js        # Playwright scraper + report generator
+├── lib/
+│   └── validation.js # Timestamp parsing and ordering logic
+├── test/
+│   └── validation.test.js # Offline unit tests
 ├── package.json    # Dependencies
 ├── README.md       # This file
 └── LICENSE         # MIT License
