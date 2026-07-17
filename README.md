@@ -47,8 +47,8 @@ Built as a take-home assessment demonstrating proficiency in:
 git clone https://github.com/tonytheg/hn-sort-validator.git
 cd hn-sort-validator
 
-# Install dependencies
-npm install
+# Install the exact locked dependency versions
+npm ci
 
 # Install Playwright browsers
 npx playwright install chromium
@@ -83,7 +83,9 @@ npm test
 
 The unit suite exercises timestamp parsing, descending/equal timestamp handling,
 incomplete collection failures, adjacent-pair failure reporting, and HTML
-escaping without requiring network access or a browser.
+escaping without requiring network access or a browser. GitHub Actions runs
+this suite on every push and pull request against Node.js 20 and 24; the live
+Hacker News scrape remains a separate integration check.
 
 ---
 
@@ -127,12 +129,14 @@ The generated report includes:
 
 ```
 hn-sort-validator/
+├── .github/workflows/test.yml # Node.js CI matrix
 ├── index.js        # Playwright scraper + report generator
 ├── lib/
 │   └── validation.js # Timestamp parsing and ordering logic
 ├── test/
 │   └── validation.test.js # Offline unit tests
-├── package.json    # Dependencies
+├── package.json    # Dependency declarations and scripts
+├── package-lock.json # Reproducible dependency versions
 ├── README.md       # This file
 └── LICENSE         # MIT License
 ```
