@@ -8,6 +8,46 @@ const {
 } = require("./lib/validation");
 
 const REQUIRED_ARTICLE_COUNT = 100;
+const PAGINATION_DELAY_MS = 5000;
+const RATE_LIMIT_RETRY_MS = 30000;
+const MAX_NAVIGATION_ATTEMPTS = 4;
+
+async function navigateWithRetry(
+  page,
+  url,
+  {
+    maxAttempts = MAX_NAVIGATION_ATTEMPTS,
+    retryDelayMs = RATE_LIMIT_RETRY_MS,
+  } = {}
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await page.goto(url, { waitUntil: "domcontentloaded" });
+    const status = response?.status();
+
+    if (status === 429) {
+      if (attempt === maxAttempts) {
+        throw new Error(
+          `Hacker News rate limit persisted after ${maxAttempts} attempts.`
+        );
+      }
+
+      console.log(
+        `Hacker News rate limited the request; retrying in ${retryDelayMs / 1000} seconds.`
+      );
+      await page.waitForTimeout(retryDelayMs);
+      continue;
+    }
+
+    if (!response || !response.ok()) {
+      throw new Error(
+        `Hacker News request failed${status ? ` with HTTP ${status}` : ""}.`
+      );
+    }
+
+    await page.waitForSelector("tr.athing");
+    return response;
+  }
+}
 
 async function sortHackerNewsArticles({ headless = true, openReport = false } = {}) {
   const browser = await chromium.launch({ headless });
@@ -15,7 +55,7 @@ async function sortHackerNewsArticles({ headless = true, openReport = false } = 
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto("https://news.ycombinator.com/newest");
+    await navigateWithRetry(page, "https://news.ycombinator.com/newest");
 
     const articles = [];
 
@@ -50,8 +90,11 @@ async function sortHackerNewsArticles({ headless = true, openReport = false } = 
         const moreLink = await page.$("a.morelink");
         if (!moreLink) break;
 
-        await moreLink.click();
-        await page.waitForSelector("tr.athing");
+        const href = await moreLink.getAttribute("href");
+        if (!href) break;
+
+        await page.waitForTimeout(PAGINATION_DELAY_MS);
+        await navigateWithRetry(page, new URL(href, page.url()).href);
       }
     }
 
@@ -242,4 +285,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { buildReport, sortHackerNewsArticles };
+module.exports = { buildReport, navigateWithRetry, sortHackerNewsArticles };

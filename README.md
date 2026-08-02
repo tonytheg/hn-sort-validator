@@ -68,8 +68,10 @@ The script will:
 
 The default run is headless, making it suitable for automation. It exits with a
 non-zero status if fewer than 100 articles are collected, the ordering check
-fails, or scraping encounters an error. To watch the browser and preview the
-generated report, run:
+fails, or scraping encounters an error. Pagination is paced to reduce load on
+Hacker News, and HTTP 429 responses receive bounded retries with a clear failure
+if rate limiting persists. To watch the browser and preview the generated
+report, run:
 
 ```bash
 npm run validate:headed
@@ -82,10 +84,11 @@ npm test
 ```
 
 The unit suite exercises timestamp parsing, descending/equal timestamp handling,
-incomplete collection failures, adjacent-pair failure reporting, and HTML
-escaping without requiring network access or a browser. GitHub Actions runs
-this suite on every push and pull request against Node.js 20 and 24; the live
-Hacker News scrape remains a separate integration check.
+incomplete collection failures, adjacent-pair failure reporting, HTML escaping,
+HTTP error handling, and rate-limit retries without requiring network access or
+a browser. GitHub Actions runs this suite on every push and pull request against
+Node.js 20 and 24; the live Hacker News scrape remains a separate integration
+check.
 
 ---
 
@@ -112,7 +115,7 @@ The generated report includes:
 2. For each page:
    ├── Extract article rows (tr.athing)
    ├── Parse rank, title, and timestamp
-   └── Click "More" for next page if needed
+   └── Follow "More" with paced, rate-limit-aware navigation
 3. Compare timestamps: article[i] >= article[i+1]
 4. Generate HTML report with results
 5. Display report in browser
@@ -134,7 +137,8 @@ hn-sort-validator/
 ├── lib/
 │   └── validation.js # Timestamp parsing and ordering logic
 ├── test/
-│   └── validation.test.js # Offline unit tests
+│   ├── validation.test.js # Validation/report unit tests
+│   └── scraper.test.js    # Navigation and retry unit tests
 ├── package.json    # Dependency declarations and scripts
 ├── package-lock.json # Reproducible dependency versions
 ├── README.md       # This file
