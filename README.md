@@ -1,160 +1,133 @@
 <div align="center">
 
-# 🔍 HN Sort Validator
+# HN Sort Validator
 
-**Automated QA tool that validates Hacker News article sorting using Playwright**
+**Automated QA check for Hacker News ordering, built with Playwright**
 
+[![Unit tests](https://github.com/tonytheg/hn-sort-validator/actions/workflows/test.yml/badge.svg)](https://github.com/tonytheg/hn-sort-validator/actions/workflows/test.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![Playwright](https://img.shields.io/badge/Playwright-Latest-2EAD33?style=flat-square&logo=playwright&logoColor=white)](https://playwright.dev)
+[![Playwright](https://img.shields.io/badge/Playwright-browser_automation-2EAD33?style=flat-square&logo=playwright)](https://playwright.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
 </div>
 
----
+## Overview
 
-## 📋 Overview
+This command-line QA tool collects the first 100 unique items from Hacker
+News's [`/newest`](https://news.ycombinator.com/newest) feed and verifies that
+their timestamps are in descending order. It then writes a self-contained HTML
+report with the overall result, pair-by-pair status, timestamps, and links to
+the source articles.
 
-A **test automation tool** that scrapes the 100 newest articles from [Hacker News](https://news.ycombinator.com/newest), validates that they are correctly sorted from newest to oldest, and generates a detailed **HTML test report** with pass/fail status for each article.
+The scraper handles a live, paginated feed rather than a static fixture. It
+paces page requests, retries bounded HTTP 429 responses, and deduplicates items
+by their stable Hacker News IDs when new submissions shift page boundaries.
+Incomplete collection, invalid markup, HTTP errors, and ordering failures all
+produce a non-zero process exit code.
 
-Built as a take-home assessment demonstrating proficiency in:
-- **Web scraping** with Playwright
-- **Test automation** and validation logic
-- **Report generation** with clean UI
-- **Pagination handling** for multi-page data
-
----
-
-## ✨ Features
-
-- 🕷️ **Automated scraping** — Collects 100 articles across multiple HN pages
-- ✅ **Sort validation** — Verifies chronological ordering (newest → oldest)
-- 📊 **HTML report** — Generates a styled test report with pass/fail indicators
-- 📄 **Pagination** — Automatically navigates through multiple pages
-- ⏱️ **Timestamp parsing** — Extracts and compares precise article timestamps
-- 🎨 **Professional report UI** — Clean, card-based layout with summary stats
-
----
-
-## 🚀 Quick Start
+## Quick start
 
 ### Prerequisites
-- [Node.js](https://nodejs.org) (v18 or higher)
 
-### Installation
+- [Node.js](https://nodejs.org) 18 or newer
+
+### Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/tonytheg/hn-sort-validator.git
 cd hn-sort-validator
-
-# Install the exact locked dependency versions
 npm ci
-
-# Install Playwright browsers
 npx playwright install chromium
 ```
 
-### Run the Validator
+### Run the validator
 
 ```bash
 npm run validate
 ```
 
-The script will:
-1. Launch a browser and navigate to HN's newest page
-2. Scrape 100 articles with their timestamps
-3. Validate the sort order
-4. Generate `report.html` with results
-
-The default run is headless, making it suitable for automation. It exits with a
-non-zero status if fewer than 100 articles are collected, the ordering check
-fails, or scraping encounters an error. Pagination is paced to reduce load on
-Hacker News, and HTTP 429 responses receive bounded retries with a clear failure
-if rate limiting persists. To watch the browser and preview the generated
-report, run:
+The default run is headless and writes `report.html` in the project directory.
+That generated file is ignored by Git. To watch the browser and briefly preview
+the completed report, run:
 
 ```bash
 npm run validate:headed
 ```
 
-### Run the Unit Tests
+## Validation behavior
+
+The command performs these checks:
+
+1. Open the Hacker News newest feed and wait for article rows.
+2. Collect article ID, rank, title, destination URL, and absolute timestamp.
+3. Follow the `More` link with a five-second delay between pages.
+4. Skip duplicate IDs caused by changes to the live feed while paging.
+5. Require exactly 100 unique articles.
+6. Verify every adjacent timestamp pair is newest-to-oldest.
+7. Generate a safe HTML report and return success or failure to the shell.
+
+HTTP 429 responses trigger a 30-second wait between attempts, with a bounded
+maximum of four navigation attempts. Other unsuccessful HTTP responses fail
+immediately with a clear status message.
+
+## Report output
+
+The generated report contains:
+
+| Section | Purpose |
+|---|---|
+| Result | Overall `PASS` or `FAIL` |
+| Articles checked | Number of unique items collected |
+| Pairs in order | Successful adjacent comparisons |
+| Article table | Rank, linked title, timestamp, and per-row status |
+
+Article titles and URLs are escaped before insertion. Only HTTP and HTTPS links
+are rendered as clickable links; unsupported URL schemes remain plain text.
+
+## Tests and CI
 
 ```bash
 npm test
 ```
 
-The unit suite exercises timestamp parsing, descending/equal timestamp handling,
-incomplete collection failures, adjacent-pair failure reporting, HTML escaping,
-HTTP error handling, and rate-limit retries without requiring network access or
-a browser. GitHub Actions runs this suite on every push and pull request against
-Node.js 20 and 24; the live Hacker News scrape remains a separate integration
-check.
+The offline Node test suite covers:
 
----
+- timestamp parsing and invalid input;
+- descending, equal, incomplete, and out-of-order results;
+- rate-limit retries and non-retryable HTTP failures;
+- duplicate article IDs across page boundaries;
+- safe URL handling and HTML escaping; and
+- generated report content and file output.
 
-## 📊 Report Output
+GitHub Actions runs the suite on Node.js 20 and 24 for every push and pull
+request. The live scrape remains a separate integration check because it
+depends on the current Hacker News site and its rate limits.
 
-The generated report includes:
+## Project structure
 
-| Section | Description |
-|---------|-------------|
-| **Result Card** | Overall PASS/FAIL status |
-| **Articles Checked** | Total number validated |
-| **In Order Count** | How many pairs are correctly sorted |
-| **Article Table** | Each article with rank, title, timestamp, and status |
-
-- ✅ **Green rows** — Articles in correct order
-- ❌ **Red rows** — Out-of-order articles
-
----
-
-## 🏗️ How It Works
-
-```
-1. Navigate to news.ycombinator.com/newest
-2. For each page:
-   ├── Extract article rows (tr.athing)
-   ├── Parse rank, title, and timestamp
-   └── Follow "More" with paced, rate-limit-aware navigation
-3. Compare timestamps: article[i] >= article[i+1]
-4. Generate HTML report with results
-5. Display report in browser
-```
-
-### Key Technical Decisions
-- **Playwright over Puppeteer** — Better API, auto-waiting, cross-browser support
-- **Real timestamps** — Uses the `title` attribute from `span.age` for precise ISO timestamps (not relative "2 hours ago" text)
-- **HTML report** — Self-contained single-file report, no server needed
-
----
-
-## 📁 Project Structure
-
-```
+```text
 hn-sort-validator/
-├── .github/workflows/test.yml # Node.js CI matrix
-├── index.js        # Playwright scraper + report generator
-├── lib/
-│   └── validation.js # Timestamp parsing and ordering logic
-├── test/
-│   ├── validation.test.js # Validation/report unit tests
-│   └── scraper.test.js    # Navigation and retry unit tests
-├── package.json    # Dependency declarations and scripts
-├── package-lock.json # Reproducible dependency versions
-├── README.md       # This file
-└── LICENSE         # MIT License
+├── .github/workflows/test.yml  # Node.js CI matrix
+├── lib/validation.js           # Parsing, ordering, and output-safety helpers
+├── test/                       # Offline navigation, validation, and report tests
+├── .gitignore                  # Generated report exclusion
+├── index.js                    # Browser automation and report generation
+├── package.json                # Commands and dependency declaration
+├── package-lock.json           # Locked dependency graph
+└── README.md                   # Setup, behavior, and test documentation
 ```
 
----
+## Technical decisions
 
-## 📄 License
+- **Absolute timestamps:** the validator uses the Unix timestamp in
+  `span.age[title]`, not relative text such as “2 hours ago.”
+- **Stable deduplication:** Hacker News item IDs prevent a moving feed from
+  counting one submission twice across pages.
+- **Bounded retries:** transient rate limiting is handled without allowing an
+  unattended run to wait forever.
+- **Offline unit tests:** core ordering, retry, deduplication, and report logic
+  can be verified without a browser or network connection.
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+## License
 
----
-
-<div align="center">
-
-**Built with Playwright & Node.js**
-
-</div>
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

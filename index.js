@@ -5,6 +5,7 @@ const {
   escapeHtml,
   evaluateValidationRun,
   parseHackerNewsTimestamp,
+  safeReportUrl,
 } = require("./lib/validation");
 
 const REQUIRED_ARTICLE_COUNT = 100;
@@ -49,6 +50,65 @@ async function navigateWithRetry(
   }
 }
 
+async function readArticleRows(page) {
+  const rows = await page.$$("tr.athing");
+
+  return Promise.all(
+    rows.map(async (row) => {
+      const id = await row.getAttribute("id");
+      if (!id) {
+        throw new Error("Hacker News returned an article without an item ID.");
+      }
+
+      const rank = await row.$eval("span.rank", (element) =>
+        element.textContent.trim()
+      );
+      const { title, url } = await row.$eval(
+        "span.titleline > a",
+        (element) => ({
+          title: element.textContent.trim(),
+          url: element.href,
+        })
+      );
+      const subtextRow = await row.evaluateHandle(
+        (element) => element.nextElementSibling
+      );
+      const ageSpan = await subtextRow.$("span.age");
+      const timestampRaw = await ageSpan?.getAttribute("title");
+      const { dateStr, timestamp } = parseHackerNewsTimestamp(timestampRaw);
+
+      return {
+        id,
+        rank: parseInt(rank, 10),
+        title,
+        url,
+        dateStr,
+        timestamp,
+      };
+    })
+  );
+}
+
+function appendUniqueArticles(
+  articles,
+  candidates,
+  seenArticleIds,
+  requiredCount = REQUIRED_ARTICLE_COUNT
+) {
+  for (const candidate of candidates) {
+    if (!candidate.id) {
+      throw new TypeError("Every article must have an item ID.");
+    }
+
+    if (seenArticleIds.has(candidate.id)) continue;
+
+    seenArticleIds.add(candidate.id);
+    articles.push(candidate);
+
+    if (articles.length >= requiredCount) break;
+  }
+}
+
 async function sortHackerNewsArticles({ headless = true, openReport = false } = {}) {
   const browser = await chromium.launch({ headless });
 
@@ -58,33 +118,11 @@ async function sortHackerNewsArticles({ headless = true, openReport = false } = 
     await navigateWithRetry(page, "https://news.ycombinator.com/newest");
 
     const articles = [];
+    const seenArticleIds = new Set();
 
     while (articles.length < REQUIRED_ARTICLE_COUNT) {
-      const rows = await page.$$("tr.athing");
-
-      for (const row of rows) {
-        if (articles.length >= REQUIRED_ARTICLE_COUNT) break;
-
-        const rank = await row.$eval("span.rank", (element) =>
-          element.textContent.trim()
-        );
-        const title = await row.$eval("span.titleline > a", (element) =>
-          element.textContent.trim()
-        );
-        const subtextRow = await row.evaluateHandle(
-          (element) => element.nextElementSibling
-        );
-        const ageSpan = await subtextRow.$("span.age");
-        const timestampRaw = await ageSpan?.getAttribute("title");
-        const { dateStr, timestamp } = parseHackerNewsTimestamp(timestampRaw);
-
-        articles.push({
-          rank: parseInt(rank, 10),
-          title,
-          dateStr,
-          timestamp,
-        });
-      }
+      const pageArticles = await readArticleRows(page);
+      appendUniqueArticles(articles, pageArticles, seenArticleIds);
 
       if (articles.length < REQUIRED_ARTICLE_COUNT) {
         const moreLink = await page.$("a.morelink");
@@ -98,7 +136,7 @@ async function sortHackerNewsArticles({ headless = true, openReport = false } = 
       }
     }
 
-    console.log(`Collected ${articles.length} articles.\n`);
+    console.log(`Collected ${articles.length} unique articles.\n`);
 
     const validation = evaluateValidationRun(articles, REQUIRED_ARTICLE_COUNT);
     const { collectionComplete, passed } = validation;
@@ -143,7 +181,14 @@ async function sortHackerNewsArticles({ headless = true, openReport = false } = 
   }
 }
 
-function buildReport(articles, { passed, failures, comparisonCount }) {
+function buildReport(
+  articles,
+  { passed, failures, comparisonCount },
+  {
+    outputPath = path.resolve(__dirname, "report.html"),
+    generatedAt = new Date(),
+  } = {}
+) {
   const failedIndices = new Set(failures.map((failure) => failure.index));
   const passCount = comparisonCount - failures.length;
   const tableRows = articles
@@ -152,18 +197,22 @@ function buildReport(articles, { passed, failures, comparisonCount }) {
       const failed = failedIndices.has(index + 1);
       const status = isLast ? "Not compared" : failed ? "Out of order" : "OK";
       const rowClass = failed ? "fail" : isLast ? "" : "pass";
+      const safeUrl = safeReportUrl(article.url);
+      const title = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}">${escapeHtml(article.title)}</a>`
+        : escapeHtml(article.title);
 
       return `
       <tr class="${rowClass}">
         <td>${article.rank}</td>
-        <td>${escapeHtml(article.title)}</td>
+        <td>${title}</td>
         <td>${escapeHtml(article.dateStr)}</td>
         <td>${status}</td>
       </tr>`;
     })
     .join("");
 
-  const now = new Date().toLocaleString();
+  const now = generatedAt.toLocaleString();
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -217,6 +266,8 @@ function buildReport(articles, { passed, failures, comparisonCount }) {
       border-bottom: 1px solid #ddd;
     }
     td { padding: 8px 14px; border-bottom: 1px solid #eee; }
+    a { color: #0969da; }
+    a:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
     tr.fail td { background: #fff5f5; }
     tr.fail td:last-child { color: #cf222e; font-weight: 600; }
     tr.pass td:last-child { color: #1a7f37; }
@@ -264,9 +315,8 @@ function buildReport(articles, { passed, failures, comparisonCount }) {
 </body>
 </html>`;
 
-  const reportPath = path.resolve(__dirname, "report.html");
-  fs.writeFileSync(reportPath, html);
-  return reportPath;
+  fs.writeFileSync(outputPath, html, "utf8");
+  return outputPath;
 }
 
 if (require.main === module) {
@@ -285,4 +335,10 @@ if (require.main === module) {
     });
 }
 
-module.exports = { buildReport, navigateWithRetry, sortHackerNewsArticles };
+module.exports = {
+  appendUniqueArticles,
+  buildReport,
+  navigateWithRetry,
+  readArticleRows,
+  sortHackerNewsArticles,
+};

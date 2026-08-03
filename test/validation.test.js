@@ -5,6 +5,7 @@ const {
   escapeHtml,
   evaluateValidationRun,
   parseHackerNewsTimestamp,
+  safeReportUrl,
   validateArticleOrder,
 } = require("../lib/validation");
 
@@ -73,7 +74,16 @@ test("fails an otherwise sorted run when the required count is not collected", (
 
 test("escapes article titles before inserting them into the HTML report", () => {
   assert.equal(
-    escapeHtml("Research & <testing>"),
-    "Research &amp; &lt;testing&gt;"
+    escapeHtml(`Research & <testing> "today's"`),
+    "Research &amp; &lt;testing&gt; &quot;today&#39;s&quot;"
   );
+});
+
+test("allows only HTTP and HTTPS links in generated reports", () => {
+  assert.equal(
+    safeReportUrl("https://example.com/article?id=1"),
+    "https://example.com/article?id=1"
+  );
+  assert.equal(safeReportUrl("javascript:alert(1)"), null);
+  assert.equal(safeReportUrl("not a URL"), null);
 });

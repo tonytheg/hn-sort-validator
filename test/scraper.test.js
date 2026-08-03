@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { navigateWithRetry } = require("../index");
+const { appendUniqueArticles, navigateWithRetry } = require("../index");
 
 function response(status) {
   return {
@@ -85,4 +85,42 @@ test("fails immediately for a non-retryable HTTP response", async () => {
   assert.equal(page.calls.goto.length, 1);
   assert.deepEqual(page.calls.waits, []);
   assert.deepEqual(page.calls.selectors, []);
+});
+
+test("collects the requested number of unique articles across pages", () => {
+  const articles = [];
+  const seenArticleIds = new Set();
+
+  appendUniqueArticles(
+    articles,
+    [
+      { id: "101", title: "First" },
+      { id: "102", title: "Second" },
+    ],
+    seenArticleIds,
+    3
+  );
+  appendUniqueArticles(
+    articles,
+    [
+      { id: "102", title: "Second, shifted" },
+      { id: "103", title: "Third" },
+      { id: "104", title: "Fourth" },
+    ],
+    seenArticleIds,
+    3
+  );
+
+  assert.deepEqual(
+    articles.map(({ id }) => id),
+    ["101", "102", "103"]
+  );
+  assert.equal(seenArticleIds.size, 3);
+});
+
+test("rejects article data without a stable Hacker News item ID", () => {
+  assert.throws(
+    () => appendUniqueArticles([], [{ title: "Missing ID" }], new Set()),
+    /must have an item ID/
+  );
 });
